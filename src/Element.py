@@ -30,6 +30,7 @@ from src.GaussQuadrature import *
 from src.ShapeFunctions import *
 from scipy import optimize
 from itertools import chain
+import matplotlib.path as mpath
 from src.Segment import *
 
 class Element:
@@ -88,6 +89,7 @@ class Element:
         ### ATTRIBUTES FOR INTERFACE ELEMENTS
         self.Neint = None           # NUMBER OF ELEMENTAL EDGES ON THE COMPUTATIONAL DOMAIN'S BOUNDARY
         self.InterfApprox = None    # ARRAY CONTAINING THE ELEMENTAL EDGES/CUTS CORRESPONDING TO INTERFACES
+        self.CutEdges = None        # LIST OF SEGMENT OBJECTS CORRESPONDING TO ELEMENTAL EDGES WHICH ARE CUT BY THE INTERFACE
         self.Nesub = None           # NUMBER OF SUBELEMENTS GENERATED IN TESSELLATION
         return
     
@@ -180,7 +182,8 @@ class Element:
 
         Input:
             interface_index (int): The index of the interface to be approximated.
-        """
+        """    
+        
         # READ LEVEL-SET NODAL VALUES
         if self.Dom == 0:  # PLASMA BOUNDARY ELEMENT
             LSe = self.PlasmaLSe  
@@ -199,14 +202,19 @@ class Element:
             # FIND POINTS ON INTERFACE USING ELEMENTAL INTERPOLATION
             #### INTERSECTION WITH EDGES
             XIintEND = np.zeros([2,2])
-            INTERFACE.ElIntNodes = np.zeros([2,2],dtype=int)
+            INTERFACE.ElIntNodes = np.zeros([2,self.nedge],dtype=int)
             k = 0
             for i in range(self.numedges):  # Loop over elemental edges
                 # Check for sign change along the edge
                 inode = i
                 jnode = (i + 1) % self.numedges
                 if LSe[inode] * LSe[jnode] < 0:
-                    INTERFACE.ElIntNodes[k,:] = [inode,jnode]
+                    # FIND HIGH-ORDER NODES BETWEEN VERTICES
+                    edge_index = get_edge_index(self.ElType,inode,jnode)
+                    INTERFACE.ElIntNodes[k,:2] = [inode, jnode]
+                    for knode in range(self.ElOrder-1):
+                        INTERFACE.ElIntNodes[k,2+knode] = self.numedges + edge_index*(self.ElOrder-1)+knode
+                        
                     if abs(XIe[jnode,0]-XIe[inode,0]) < 1e-6: # VERTICAL EDGE
                         #### DEFINE CONSTRAINT PHI FUNCTION
                         xi = XIe[inode,0]
@@ -299,7 +307,7 @@ class Element:
                                         for iseg in range(INTERFACE.Nsegments)]   
             for iseg, SEGMENT in enumerate(INTERFACE.Segments):
                 # STORE REFERENCE APRIORI NODES 
-                SEGMENT.XIseg = INTERFACE.XIint[INTERFACE.Tint[iseg:iseg+2]]
+                SEGMENT.XIseg = INTERFACE.XIint[INTERFACE.Tint[iseg:iseg+2],:]
                 # COMPUTE INNER HIGH-ORDER NODES IN EACH SEGMENT CONFORMING THE INTERFACE APPROXIMATION (BOTH REFERENCE AND PHYSICAL SPACE)
                 XsegHO = np.zeros([SEGMENT.n,SEGMENT.dim])
                 XIsegHO = np.zeros([SEGMENT.n,SEGMENT.dim])
@@ -317,7 +325,18 @@ class Element:
                 # STORE HIGH-ORDER SEGMENT ELEMENTS CONFORMING HIGH-ORDER INTERFACE APPROXIMATION
                 SEGMENT.Xseg = XsegHO
                 SEGMENT.XIseg = XIsegHO
+               
                 
+            #### GENERATE SEGMENT OBJECT FOR EACH ELEMENTAL CUT EDGE (COMMON CUT EDGES)
+            self.CutEdges = [Segment(index = iseg,
+                                        ElOrder = self.ElOrder,   
+                                        Xseg = self.Xe[INTERFACE.ElIntNodes[iseg,:],:]) 
+                                        for iseg in range(2)] 
+            
+            for iedge, EDGE in enumerate(self.CutEdges):
+                # STORE REFERENCE EDGE NODES
+                EDGE.XIseg = XIe[INTERFACE.ElIntNodes[iedge,:],:] 
+            
         return 
     
     
@@ -354,8 +373,8 @@ class Element:
                                         ElOrder = self.ElOrder,   
                                         Xseg = np.zeros([2,self.dim])) for iseg in range(INTERFACE.Nsegments)] 
             # FIND LOCAL INDEXES OF NODES ON EDGE 
-            INTERFACE.ElIntNodes = np.zeros([len(Tbound[0,:-1])], dtype=int)
-            for i in range(len(Tbound[0,:-1])):
+            INTERFACE.ElIntNodes = np.zeros([self.nedge], dtype=int)
+            for i in range(self.nedge):
                 INTERFACE.ElIntNodes[i] = np.where(Tbound[interface[interf],i] == self.Te)[0][0]
             # COORDINATES OF NODES ON EDGE (PHYSICAL SPACE)
             INTERFACE.Xint = self.Xe[INTERFACE.ElIntNodes,:]
@@ -436,6 +455,33 @@ class Element:
                     SEGMENT.NormalVec = ntest
                 else: 
                     SEGMENT.NormalVec = -1*ntest
+        return
+    
+    
+    def CutEdgesNormals(self):
+        
+        for EDGE in self.CutEdges:
+            #### PREPARE TEST NORMAL VECTOR IN PHYSICAL SPACE
+            dx = EDGE.Xseg[1,0] - EDGE.Xseg[0,0]
+            dy = EDGE.Xseg[1,1] - EDGE.Xseg[0,1]
+            ntest = np.array([-dy, dx]) 
+            ntest = ntest/np.linalg.norm(ntest) 
+            Xsegmean = np.mean(EDGE.Xseg,axis=0)
+            dl = min((max(self.Xe[:self.numedges,0])-min(self.Xe[:self.numedges,0])),(max(self.Xe[:self.numedges,1])-min(self.Xe[:self.numedges,1])))
+            dl *= 0.1
+            Xtest = Xsegmean + dl*ntest 
+            
+            #### TEST IF POINT Xtest LIES INSIDE TRIANGLE ELEMENT
+            # Create a Path object for element
+            polygon_path = mpath.Path(np.concatenate((self.Xe[:self.numedges,:],self.Xe[0,:].reshape(1,self.dim)),axis=0))
+            # Check if Xtest is inside the element
+            inside = polygon_path.contains_points(Xtest.reshape(1,self.dim))
+                
+            if not inside:  # TEST POINT OUTSIDE ELEMENT
+                EDGE.NormalVec = ntest
+            else:   # TEST POINT INSIDE ELEMENT --> NEED TO TAKE THE OPPOSITE NORMAL VECTOR
+                EDGE.NormalVec = -1*ntest
+        
         return
     
     
@@ -566,7 +612,7 @@ class Element:
 
         XIeLIN = ReferenceElementCoordinates(self.ElType,1)
         INTERFACE = self.InterfApprox[0]
-        edgenodes = INTERFACE.ElIntNodes
+        edgenodes = INTERFACE.ElIntNodes[:2]
 
         if self.ElType == 1:  # TRIANGULAR ELEMENT
             Nesub = 3
@@ -852,7 +898,27 @@ class Element:
                 # MAPP REFERENCE INTERFACE ADAPTED QUADRATURE ON PHYSICAL ELEMENT 
                 SEGMENT.Xg = N1D @ SEGMENT.Xseg
                 for ig in range(SEGMENT.ng):
-                    SEGMENT.detJg[ig] = Jacobian1D(SEGMENT.Xseg,dNdxi1D[ig,:])  
+                    SEGMENT.detJg[ig] = Jacobian1D(SEGMENT.Xseg,dNdxi1D[ig,:]) 
+                    
+                    
+        ######### ADAPTED QUADRATURE TO INTERGRATE OVER ELEMENTAL COMMON CUT EDGES (1D)
+        for iseg, EDGE in enumerate(self.CutEdges):
+            EDGE.ng = Ng1D
+            EDGE.Wg = Wg1D
+            EDGE.detJg = np.zeros([EDGE.ng])
+            # MAP 1D REFERENCE STANDARD GAUSS INTEGRATION NODES ON ELEMENTAL CUT EDGE ->> ADAPTED 1D QUADRATURE FOR CUT EDGE
+            EDGE.XIg = N1D @ EDGE.XIseg
+            # EVALUATE 2D REFERENCE SHAPE FUNCTION ON ELEMENTAL CUT EDGE 
+            EDGE.Ng, EDGE.dNdxig, EDGE.dNdetag = EvaluateReferenceShapeFunctions(EDGE.XIg, self.ElType, self.ElOrder)
+            # DISCARD THE NODAL SHAPE FUNCTIONS WHICH ARE NOT ON THE EDGE (ZERO VALUE)
+            EDGE.Ng = EDGE.Ng[:,self.InterfApprox[0].ElIntNodes[iseg,:]]
+            EDGE.dNdxig = EDGE.dNdxig[:,self.InterfApprox[0].ElIntNodes[iseg,:]]
+            EDGE.dNdetag = EDGE.dNdetag[:,self.InterfApprox[0].ElIntNodes[iseg,:]]
+            # MAPP REFERENCE INTERFACE ADAPTED QUADRATURE ON PHYSICAL ELEMENT 
+            EDGE.Xg = N1D @ EDGE.Xseg
+            for ig in range(SEGMENT.ng):
+                EDGE.detJg[ig] = Jacobian1D(EDGE.Xseg,dNdxi1D[ig,:]) 
+                     
         return 
     
     
@@ -1158,3 +1224,27 @@ def ReferenceElementCoordinates(elemType,elemOrder):
                                    [1/3,1/3],
                                    [-1/3,1/3]])
     return Xe
+
+
+def get_edge_index(ElType,inode,jnode):
+    """
+    Determines the edge index from the given vertices.
+
+    Input:
+        - elemType (int): The type of element. Possible values:
+                    - 0: 1D element (segment)
+                    - 1: 2D triangular element
+                    - 2: 2D quadrilateral element
+        - inode (int): Index of the first vertex of the edge.
+        - jnode (int): Index of the second vertex of the edge.
+
+    Output:
+        - The index of the edge in the list.
+    """
+    if ElType == 1:
+        element_edges = [(0,1), (1,2), (2,0)]
+    elif ElType == 2:
+        element_edges = [(0,1), (1,2), (2,3), (3,0)]
+    
+    return element_edges.index((inode,jnode))
+    
