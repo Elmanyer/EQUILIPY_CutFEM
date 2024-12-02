@@ -74,6 +74,7 @@ class Element:
         self.VacVessLSe = VacVessLSe                                    # ELEMENTAL NODAL VACUUM VESSEL FIRST WALL LEVEL-SET VALUES
         self.PSIe = np.zeros([self.n])                                  # ELEMENTAL NODAL PSI VALUES
         self.Dom = None                                                 # DOMAIN WHERE THE ELEMENT LIES (-1: "PLASMA"; 0: "PLASMA INTERFACE"; +1: "VACUUM" ; +2: FIRST WALL ; +3: "EXTERIOR")
+        self.neighbours = None                                           # MATRIX CONTAINING THE GLOBAL INDEXES OF NEAREST NEIGHBOURS ELEMENTS CORRESPONDING TO EACH ELEMENTAL FACE (LOCAL INDEX ORDERING FOR FACES)
         
         # INTEGRATION QUADRATURES ENTITIES
         self.ng = None              # NUMBER OF GAUSS INTEGRATION NODES IN STANDARD 2D GAUSS QUADRATURE
@@ -89,7 +90,7 @@ class Element:
         ### ATTRIBUTES FOR INTERFACE ELEMENTS
         self.Neint = None           # NUMBER OF ELEMENTAL EDGES ON THE COMPUTATIONAL DOMAIN'S BOUNDARY
         self.InterfApprox = None    # ARRAY CONTAINING THE ELEMENTAL EDGES/CUTS CORRESPONDING TO INTERFACES
-        self.CutEdges = None        # LIST OF SEGMENT OBJECTS CORRESPONDING TO ELEMENTAL EDGES WHICH ARE CUT BY THE INTERFACE
+        self.GhostFaces = None      # LIST OF SEGMENT OBJECTS CORRESPONDING TO ELEMENTAL EDGES WHICH ARE INTEGRATED AS GHOST PENALTY TERMS
         self.Nesub = None           # NUMBER OF SUBELEMENTS GENERATED IN TESSELLATION
         return
     
@@ -161,6 +162,78 @@ class Element:
             F += N*Fe[i]
         return F
     
+    
+    ##################################################################################################
+    ##################################### MAGNETIC FIELD B ###########################################
+    ##################################################################################################
+    
+    def Br(self,X):
+        """
+        Total radial magnetic field at point X such that    Br = -1/R dpsi/dZ
+        """
+        Br = 0
+        XI = self.InverseMapping(X)
+        for i in range(self.n):
+            foo, foo, dNdeta = ShapeFunctionsReference(XI, self.ElType, self.ElOrder, i+1)
+            Br -= dNdeta*self.PSIe[i]/X[0]
+        return Br
+    
+    def Bre(self):
+        """
+        Elemental nodes total radial magnetic field such that    Br = -1/R dpsi/dZ
+        """
+        Bre = np.zeros([self.n])
+        XIe = ReferenceElementCoordinates(self.ElType,self.ElOrder)
+        foo, foo, dNdeta = EvaluateReferenceShapeFunctions(XIe, self.ElType, self.ElOrder)
+        for inode in range(self.n):
+            Bre[inode] = -self.PSIe@dNdeta[inode,:]/self.Xe[inode,0]
+        return Bre
+    
+    def Bz(self,X):
+        """
+        Total vertical magnetic field at point X such that    Bz = 1/R dpsi/dR
+        """
+        Bz = 0
+        XI = self.InverseMapping(X)
+        for i in range(self.n):
+            foo, dNdxi, foo = ShapeFunctionsReference(XI, self.ElType, self.ElOrder, i+1)
+            Bz += dNdxi*self.PSIe[i]/X[0]
+        return Bz
+    
+    def Bze(self):
+        """
+        Elemental nodes total vertical magnetic field such that    Bz = 1/R dpsi/dR
+        """
+        Bze = np.zeros([self.n])
+        XIe = ReferenceElementCoordinates(self.ElType,self.ElOrder)
+        foo, dNdxi, foo = EvaluateReferenceShapeFunctions(XIe, self.ElType, self.ElOrder)
+        for inode in range(self.n):
+            Bze[inode] = self.PSIe@dNdxi[inode,:]/self.Xe[inode,0]
+        return Bze
+    
+    def Brz(self,X):
+        """
+        Total magnetic field vector at point X such that    (Br, Bz) = (-1/R dpsi/dZ, 1/R dpsi/dR)
+        """
+        Brz = np.zeros([2])
+        XI = self.InverseMapping(X)
+        for i in range(self.n):
+            foo, dNdxi, dNdeta = ShapeFunctionsReference(XI, self.ElType, self.ElOrder, i+1)
+            Brz[0] -= dNdeta*self.PSIe[i]/X[0]
+            Brz[1] += dNdxi*self.PSIe[i]/X[0]
+        return Brz
+    
+    def Brze(self):
+        """
+        Elemental nodes total magnetic field vector such that    (Br, Bz) = (-1/R dpsi/dZ, 1/R dpsi/dR)
+        """
+        Brze = np.zeros([self.n,2])
+        XIe = ReferenceElementCoordinates(self.ElType,self.ElOrder)
+        foo, dNdxi, dNdeta = EvaluateReferenceShapeFunctions(XIe, self.ElType, self.ElOrder)
+        for inode in range(self.n):
+            Brze[inode,0] = -self.PSIe@dNdeta[inode,:]/self.Xe[inode,0]
+            Brze[inode,1] = self.PSIe@dNdxi[inode,:]/self.Xe[inode,0]
+        return Brze
     
     ##################################################################################################
     ######################### CUT ELEMENTS INTERFACE APPROXIMATION ###################################
@@ -326,7 +399,7 @@ class Element:
                 SEGMENT.Xseg = XsegHO
                 SEGMENT.XIseg = XIsegHO
                
-                
+            """   
             #### GENERATE SEGMENT OBJECT FOR EACH ELEMENTAL CUT EDGE (COMMON CUT EDGES)
             self.CutEdges = [Segment(index = iseg,
                                         ElOrder = self.ElOrder,   
@@ -336,7 +409,7 @@ class Element:
             for iedge, EDGE in enumerate(self.CutEdges):
                 # STORE REFERENCE EDGE NODES
                 EDGE.XIseg = XIe[INTERFACE.ElIntNodes[iedge,:],:] 
-            
+            """
         return 
     
     
@@ -484,6 +557,30 @@ class Element:
         
         return
     
+    
+    def GhostFacesNormals(self):
+        
+        for FACE in self.GhostFaces:
+            #### PREPARE TEST NORMAL VECTOR IN PHYSICAL SPACE
+            dx = FACE.Xseg[1,0] - FACE.Xseg[0,0]
+            dy = FACE.Xseg[1,1] - FACE.Xseg[0,1]
+            ntest = np.array([-dy, dx]) 
+            ntest = ntest/np.linalg.norm(ntest) 
+            Xsegmean = np.mean(FACE.Xseg,axis=0)
+            dl = min((max(self.Xe[:self.numedges,0])-min(self.Xe[:self.numedges,0])),(max(self.Xe[:self.numedges,1])-min(self.Xe[:self.numedges,1])))
+            dl *= 0.1
+            Xtest = Xsegmean + dl*ntest 
+            
+            #### TEST IF POINT Xtest LIES INSIDE TRIANGLE ELEMENT
+            # Create a Path object for element
+            polygon_path = mpath.Path(np.concatenate((self.Xe[:self.numedges,:],self.Xe[0,:].reshape(1,self.dim)),axis=0))
+            # Check if Xtest is inside the element
+            inside = polygon_path.contains_points(Xtest.reshape(1,self.dim))
+                
+            if not inside:  # TEST POINT OUTSIDE ELEMENT
+                FACE.NormalVec = ntest
+            else:   # TEST POINT INSIDE ELEMENT --> NEED TO TAKE THE OPPOSITE NORMAL VECTOR
+                FACE.NormalVec = -1*ntest
     
     ##################################################################################################
     ################################ ELEMENTAL TESSELLATION ##########################################
@@ -900,7 +997,7 @@ class Element:
                 for ig in range(SEGMENT.ng):
                     SEGMENT.detJg[ig] = Jacobian1D(SEGMENT.Xseg,dNdxi1D[ig,:]) 
                     
-                    
+        """            
         ######### ADAPTED QUADRATURE TO INTERGRATE OVER ELEMENTAL COMMON CUT EDGES (1D)
         for iseg, EDGE in enumerate(self.CutEdges):
             EDGE.ng = Ng1D
@@ -916,10 +1013,39 @@ class Element:
             EDGE.dNdetag = EDGE.dNdetag[:,self.InterfApprox[0].ElIntNodes[iseg,:]]
             # MAPP REFERENCE INTERFACE ADAPTED QUADRATURE ON PHYSICAL ELEMENT 
             EDGE.Xg = N1D @ EDGE.Xseg
-            for ig in range(SEGMENT.ng):
+            for ig in range(EDGE.ng):
                 EDGE.detJg[ig] = Jacobian1D(EDGE.Xseg,dNdxi1D[ig,:]) 
-                     
+                     """
         return 
+    
+    
+    def ComputeGhostFacesQuadratures(self,NumQuadOrder):
+        
+        ######### ADAPTED QUADRATURE TO INTEGRATE OVER ELEMENTAL INTERFACE APPROXIMATION (1D)
+        #### STANDARD REFERENCE ELEMENT QUADRATURE TO INTEGRATE LINES (1D)
+        XIg1Dstand, Wg1D, Ng1D = GaussQuadrature(0,NumQuadOrder)
+        #### QUADRATURE TO INTEGRATE LINES (1D)
+        N1D, dNdxi1D, foo = EvaluateReferenceShapeFunctions(XIg1Dstand, 0, self.nedge-1)
+                    
+        ######### ADAPTED QUADRATURE TO INTERGRATE OVER ELEMENTAL GHOST FACES (1D)
+        for iseg, FACE in enumerate(self.GhostFaces):
+            FACE.ng = Ng1D
+            FACE.Wg = Wg1D
+            FACE.detJg = np.zeros([FACE.ng])
+            # MAP 1D REFERENCE STANDARD GAUSS INTEGRATION NODES ON ELEMENTAL CUT EDGE ->> ADAPTED 1D QUADRATURE FOR CUT EDGE
+            FACE.XIg = N1D @ FACE.XIseg
+            # EVALUATE 2D REFERENCE SHAPE FUNCTION ON ELEMENTAL CUT EDGE 
+            FACE.Ng, FACE.dNdxig, FACE.dNdetag = EvaluateReferenceShapeFunctions(FACE.XIg, self.ElType, self.ElOrder)
+            # DISCARD THE NODAL SHAPE FUNCTIONS WHICH ARE NOT ON THE FACE (ZERO VALUE)
+            FACE.Ng = FACE.Ng[:,self.InterfApprox[0].ElIntNodes[iseg,:]]
+            FACE.dNdxig = FACE.dNdxig[:,self.InterfApprox[0].ElIntNodes[iseg,:]]
+            FACE.dNdetag = FACE.dNdetag[:,self.InterfApprox[0].ElIntNodes[iseg,:]]
+            # MAPP REFERENCE INTERFACE ADAPTED QUADRATURE ON PHYSICAL ELEMENT 
+            FACE.Xg = N1D @ FACE.Xseg
+            for ig in range(FACE.ng):
+                FACE.detJg[ig] = Jacobian1D(FACE.Xseg,dNdxi1D[ig,:]) 
+        
+        return
     
     
     ##################################################################################################

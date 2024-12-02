@@ -71,6 +71,7 @@ class Segment:
         self.ElOrder = ElOrder      # ELEMENT ORDER -> 1: LINEAR ELEMENT  ;  2: QUADRATIC
         self.dim = len(Xseg[0,:])   # SPATIAL DIMENSION
         self.n = ElOrder+1          # NUMBER OF NODES ON SEGMENT (1D ELEMENT)
+        self.Tseg = None            # CONECTIVITY MATRIX RESPECT TO ELEMENTAL LOCAL INDEXES
         self.Xseg = Xseg            # ELEMENTAL NODAL COORDINATES MATRIX (PHYSICAL SPACE)
         self.XIseg = None           # ELEMENTAL NODAL COORDINATES MATRIX (REFERENCE SPACE) 
         self.PSIgseg = None         # PSI VALUE ON SEGMENT GAUSS INTEGRATION NODES
