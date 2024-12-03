@@ -375,12 +375,13 @@ class Element:
         
             #### GENERATE SEGMENT OBJECTS AND STORE INTERFACE DATA
             INTERFACE.Segments = [Segment(index = iseg,
-                                        ElOrder = self.ElOrder,   
-                                        Xseg = INTERFACE.Xint[INTERFACE.Tint[iseg:iseg+2]]) 
-                                        for iseg in range(INTERFACE.Nsegments)]   
-            for iseg, SEGMENT in enumerate(INTERFACE.Segments):
-                # STORE REFERENCE APRIORI NODES 
-                SEGMENT.XIseg = INTERFACE.XIint[INTERFACE.Tint[iseg:iseg+2],:]
+                                        ElOrder = self.ElOrder,
+                                        Tseg = None,
+                                        Xseg = INTERFACE.Xint[INTERFACE.Tint[iseg:iseg+2],:],
+                                        XIseg = INTERFACE.XIint[INTERFACE.Tint[iseg:iseg+2],:]) 
+                                        for iseg in range(INTERFACE.Nsegments)]  
+             
+            for SEGMENT in INTERFACE.Segments:
                 # COMPUTE INNER HIGH-ORDER NODES IN EACH SEGMENT CONFORMING THE INTERFACE APPROXIMATION (BOTH REFERENCE AND PHYSICAL SPACE)
                 XsegHO = np.zeros([SEGMENT.n,SEGMENT.dim])
                 XIsegHO = np.zeros([SEGMENT.n,SEGMENT.dim])
@@ -399,17 +400,6 @@ class Element:
                 SEGMENT.Xseg = XsegHO
                 SEGMENT.XIseg = XIsegHO
                
-            """   
-            #### GENERATE SEGMENT OBJECT FOR EACH ELEMENTAL CUT EDGE (COMMON CUT EDGES)
-            self.CutEdges = [Segment(index = iseg,
-                                        ElOrder = self.ElOrder,   
-                                        Xseg = self.Xe[INTERFACE.ElIntNodes[iseg,:],:]) 
-                                        for iseg in range(2)] 
-            
-            for iedge, EDGE in enumerate(self.CutEdges):
-                # STORE REFERENCE EDGE NODES
-                EDGE.XIseg = XIe[INTERFACE.ElIntNodes[iedge,:],:] 
-            """
         return 
     
     
@@ -443,8 +433,10 @@ class Element:
         for interf, INTERFACE in enumerate(self.InterfApprox):
             # GENERATE SEGMENT OBJECTS AND STORE INTERFACE DATA
             INTERFACE.Segments = [Segment(index = iseg,
-                                        ElOrder = self.ElOrder,   
-                                        Xseg = np.zeros([2,self.dim])) for iseg in range(INTERFACE.Nsegments)] 
+                                        ElOrder = self.ElOrder,
+                                        Tseg = None,   
+                                        Xseg = np.zeros([2,self.dim]),
+                                        XIseg = None) for iseg in range(INTERFACE.Nsegments)] 
             # FIND LOCAL INDEXES OF NODES ON EDGE 
             INTERFACE.ElIntNodes = np.zeros([self.nedge], dtype=int)
             for i in range(self.nedge):
@@ -456,6 +448,7 @@ class Element:
             INTERFACE.Tint = np.array([[0,1]], dtype=int)
             # STORE DATA ON SEGMENT OBJECT
             for SEGMENT in INTERFACE.Segments:
+                SEGMENT.Tseg = INTERFACE.ElIntNodes
                 SEGMENT.Xseg = INTERFACE.Xint
                 SEGMENT.XIseg = INTERFACE.XIint
                 
@@ -529,34 +522,7 @@ class Element:
                 else: 
                     SEGMENT.NormalVec = -1*ntest
         return
-    
-    
-    def CutEdgesNormals(self):
-        
-        for EDGE in self.CutEdges:
-            #### PREPARE TEST NORMAL VECTOR IN PHYSICAL SPACE
-            dx = EDGE.Xseg[1,0] - EDGE.Xseg[0,0]
-            dy = EDGE.Xseg[1,1] - EDGE.Xseg[0,1]
-            ntest = np.array([-dy, dx]) 
-            ntest = ntest/np.linalg.norm(ntest) 
-            Xsegmean = np.mean(EDGE.Xseg,axis=0)
-            dl = min((max(self.Xe[:self.numedges,0])-min(self.Xe[:self.numedges,0])),(max(self.Xe[:self.numedges,1])-min(self.Xe[:self.numedges,1])))
-            dl *= 0.1
-            Xtest = Xsegmean + dl*ntest 
-            
-            #### TEST IF POINT Xtest LIES INSIDE TRIANGLE ELEMENT
-            # Create a Path object for element
-            polygon_path = mpath.Path(np.concatenate((self.Xe[:self.numedges,:],self.Xe[0,:].reshape(1,self.dim)),axis=0))
-            # Check if Xtest is inside the element
-            inside = polygon_path.contains_points(Xtest.reshape(1,self.dim))
-                
-            if not inside:  # TEST POINT OUTSIDE ELEMENT
-                EDGE.NormalVec = ntest
-            else:   # TEST POINT INSIDE ELEMENT --> NEED TO TAKE THE OPPOSITE NORMAL VECTOR
-                EDGE.NormalVec = -1*ntest
-        
-        return
-    
+     
     
     def GhostFacesNormals(self):
         
@@ -709,7 +675,7 @@ class Element:
 
         XIeLIN = ReferenceElementCoordinates(self.ElType,1)
         INTERFACE = self.InterfApprox[0]
-        edgenodes = INTERFACE.ElIntNodes[:2]
+        edgenodes = INTERFACE.ElIntNodes[:,:2]
 
         if self.ElType == 1:  # TRIANGULAR ELEMENT
             Nesub = 3
@@ -997,25 +963,6 @@ class Element:
                 for ig in range(SEGMENT.ng):
                     SEGMENT.detJg[ig] = Jacobian1D(SEGMENT.Xseg,dNdxi1D[ig,:]) 
                     
-        """            
-        ######### ADAPTED QUADRATURE TO INTERGRATE OVER ELEMENTAL COMMON CUT EDGES (1D)
-        for iseg, EDGE in enumerate(self.CutEdges):
-            EDGE.ng = Ng1D
-            EDGE.Wg = Wg1D
-            EDGE.detJg = np.zeros([EDGE.ng])
-            # MAP 1D REFERENCE STANDARD GAUSS INTEGRATION NODES ON ELEMENTAL CUT EDGE ->> ADAPTED 1D QUADRATURE FOR CUT EDGE
-            EDGE.XIg = N1D @ EDGE.XIseg
-            # EVALUATE 2D REFERENCE SHAPE FUNCTION ON ELEMENTAL CUT EDGE 
-            EDGE.Ng, EDGE.dNdxig, EDGE.dNdetag = EvaluateReferenceShapeFunctions(EDGE.XIg, self.ElType, self.ElOrder)
-            # DISCARD THE NODAL SHAPE FUNCTIONS WHICH ARE NOT ON THE EDGE (ZERO VALUE)
-            EDGE.Ng = EDGE.Ng[:,self.InterfApprox[0].ElIntNodes[iseg,:]]
-            EDGE.dNdxig = EDGE.dNdxig[:,self.InterfApprox[0].ElIntNodes[iseg,:]]
-            EDGE.dNdetag = EDGE.dNdetag[:,self.InterfApprox[0].ElIntNodes[iseg,:]]
-            # MAPP REFERENCE INTERFACE ADAPTED QUADRATURE ON PHYSICAL ELEMENT 
-            EDGE.Xg = N1D @ EDGE.Xseg
-            for ig in range(EDGE.ng):
-                EDGE.detJg[ig] = Jacobian1D(EDGE.Xseg,dNdxi1D[ig,:]) 
-                     """
         return 
     
     
@@ -1037,9 +984,9 @@ class Element:
             # EVALUATE 2D REFERENCE SHAPE FUNCTION ON ELEMENTAL CUT EDGE 
             FACE.Ng, FACE.dNdxig, FACE.dNdetag = EvaluateReferenceShapeFunctions(FACE.XIg, self.ElType, self.ElOrder)
             # DISCARD THE NODAL SHAPE FUNCTIONS WHICH ARE NOT ON THE FACE (ZERO VALUE)
-            FACE.Ng = FACE.Ng[:,self.InterfApprox[0].ElIntNodes[iseg,:]]
-            FACE.dNdxig = FACE.dNdxig[:,self.InterfApprox[0].ElIntNodes[iseg,:]]
-            FACE.dNdetag = FACE.dNdetag[:,self.InterfApprox[0].ElIntNodes[iseg,:]]
+            FACE.Ng = FACE.Ng[:,FACE.Tseg]
+            FACE.dNdxig = FACE.dNdxig[:,FACE.Tseg]
+            FACE.dNdetag = FACE.dNdetag[:,FACE.Tseg]
             # MAPP REFERENCE INTERFACE ADAPTED QUADRATURE ON PHYSICAL ELEMENT 
             FACE.Xg = N1D @ FACE.Xseg
             for ig in range(FACE.ng):

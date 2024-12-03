@@ -173,12 +173,10 @@ class GradShafranovCutFEM:
         self.QuadratureOrder = None         # NUMERICAL INTEGRATION QUADRATURE ORDER
         self.SoleOrder = 2                  # SOLENOID ELEMENT (BAR) ORDER
         
-        self.PlasmaBoundElemsComEdges = None
-        self.VacVessElemsComEdges = None
-        self.PlasmaBoundGhostFaces = None
-        self.PlasmaBoundGhostElems = None
-        self.VacVessWallGhostFaces = None
-        self.VacVessWallGhostElems = None
+        self.PlasmaBoundGhostFaces = None   # LIST OF PLASMA BOUNDARY GHOST FACES
+        self.PlasmaBoundGhostElems = None   # LIST OF ELEMENTS CONTAINING PLASMA BOUNDARY FACES
+        self.VacVessWallGhostFaces = None   # LIST OF VACUUM VESSEL WALL GHOST FACES
+        self.VacVessWallGhostElems = None   # LIST OF ELEMENTS CONTAINING VACUUM VESSEL WALL GHOST FACES
         
         #### DOBLE WHILE LOOP STRUCTURE PARAMETERS
         self.INT_TOL = None                 # INTERNAL LOOP STRUCTURE CONVERGENCE TOLERANCE
@@ -1243,63 +1241,6 @@ class GradShafranovCutFEM:
         return Classification
     
     
-    def ElementalCommonCutEdgesIdentification(self,BOUNDARY):
-        
-        # Algorithm to find the index
-        def find_index_of_unsorted_tuple(lst, target):
-            # Sort the target tuple for comparison
-            sorted_target = tuple(sorted(target))
-            for index, item in enumerate(lst):
-                # Sort the current tuple and compare
-                if tuple(sorted(item)) == sorted_target:
-                    # Compute the permutation
-                    permutation = [item.index(x) for x in target]
-                    return index, permutation
-            return -1  # Return -1 if not found
-        
-        if BOUNDARY == self.PLASMAbound:
-            elements = self.PlasmaBoundElems
-        elif BOUNDARY == self.VACVESbound:
-            elements = self.VacVessWallElems
-            
-        # JOIN ALL CUT EDGES FROM CUT ELEMENTS IN THE FORM  [ELEMENT_INDEX, CUT_EDGE_INDEX, (CUT_EDGE_VERTICES_GLOBAL_INDEXES)]
-        CutEdgesVertices = list()
-        CutEdgesElems = list()
-        for ielem in elements:
-            ELEMENT = self.Elements[ielem]
-            for INTERFACE in self.Elements[ielem].InterfApprox:
-                for iedge in range(len(INTERFACE.ElIntNodes[:,0])):
-                    CutEdgesElems.append((ELEMENT.index,iedge))
-                    CutEdgesVertices.append(tuple(ELEMENT.Te[INTERFACE.ElIntNodes[iedge,:]]))
-                    
-        # TOTAL NUMBER OF CUT ELEMENTS COMMON EDGES = TOTAL NUMBER OF CUT ELEMENTS
-        CutElemsComEdges = list()    # [(CUT_EDGE_VERTICES_GLOBAL_INDEXES),(ELEMENT_INDEX_1, CUT_EDGE_INDEX_1), (ELEMENT_INDEX_2, CUT_EDGE_INDEX_2)]
-
-        for ielem in range(len(elements)):
-            # FIND SAME CUT EDGES
-            tuplelist = CutEdgesVertices[1:]
-            target = CutEdgesVertices[0]
-            index, permutation = find_index_of_unsorted_tuple(tuplelist, target)
-            elem1 = CutEdgesElems.pop(index+1)
-            elem0 = CutEdgesElems.pop(0)
-            CutElemsComEdges.append([target,elem0,elem1,permutation])
-            del CutEdgesVertices[0]
-            del CutEdgesVertices[index]
-        
-        return CutElemsComEdges
-    
-    
-    def CorrectPermutedCutEdges(self,ComCutEdges):
-        
-        for cutedge in ComCutEdges:
-            # PERMUTATE CUTEDGE NODES (PHYSICAL)
-            self.Elements[cutedge[2][0]].CutEdges[cutedge[2][1]].Xseg = self.Elements[cutedge[2][0]].CutEdges[cutedge[2][1]].Xseg[cutedge[3],:] 
-            # PERMUTATE CUTEDGE NODES (REFERENCE)
-            self.Elements[cutedge[2][0]].CutEdges[cutedge[2][1]].XIseg = self.Elements[cutedge[2][0]].CutEdges[cutedge[2][1]].XIseg[cutedge[3],:] 
-        return
-    
-    
-    
     def IdentifyGhostFaces(self,BOUNDARY):
         
         if BOUNDARY == self.PLASMAbound:
@@ -1356,8 +1297,11 @@ class GradShafranovCutFEM:
             nodes1[1] = (iedge1+1)%ELEM1.numedges
             for knode in range(ELEM1.ElOrder-1):
                 nodes1[2+knode] = ELEM1.numedges + iedge1*(ELEM1.ElOrder-1)+knode
-            ELEM1.GhostFaces.append(Segment(iedge1,ELEM1.ElOrder,ELEM1.Xe[nodes1,:]))
-            ELEM1.GhostFaces[-1].XIseg = XIe[nodes1,:]
+            ELEM1.GhostFaces.append(Segment(index = iedge1,
+                                            ElOrder = ELEM1.ElOrder,
+                                            Tseg = nodes1,
+                                            Xseg = ELEM1.Xe[nodes1,:],
+                                            XIseg = XIe[nodes1,:]))
             
             # ADD GHOST FACE TO ELEMENT 1
             nodes2 = np.zeros([ELEM2.nedge],dtype=int)
@@ -1365,19 +1309,44 @@ class GradShafranovCutFEM:
             nodes2[1] = (iedge2+1)%ELEM2.numedges
             for knode in range(ELEM2.ElOrder-1):
                 nodes2[2+knode] = ELEM2.numedges + iedge2*(ELEM2.ElOrder-1)+knode
-            ELEM2.GhostFaces.append(Segment(iedge2,ELEM2.ElOrder,ELEM2.Xe[nodes2,:]))
-            ELEM2.GhostFaces[-1].XIseg = XIe[nodes2,:]
+            ELEM2.GhostFaces.append(Segment(index = iedge2,
+                                            ElOrder = ELEM2.ElOrder,
+                                            Tseg = nodes2,
+                                            Xseg = ELEM2.Xe[nodes2,:],
+                                            XIseg = XIe[nodes2,:]))
             
             # CORRECT SECOND ADJACENT ELEMENT GHOST FACE TO MATCH NODES -> PERMUTATION
             permutation = [list(ELEM2.Te[nodes2]).index(x) for x in ELEM1.Te[nodes1]]
             ELEM2.GhostFaces[-1].Xseg = ELEM2.GhostFaces[-1].Xseg[permutation,:]
             ELEM2.GhostFaces[-1].XIseg = ELEM2.GhostFaces[-1].XIseg[permutation,:]
 
-            GhostFaces.append((list(ELEM1.Te[nodes1]),(ielem1,iedge1),(ielem2,iedge2), permutation))
+            GhostFaces.append((list(ELEM1.Te[nodes1]),(ielem1,iedge1,len(ELEM1.GhostFaces)-1),(ielem2,iedge2,len(ELEM2.GhostFaces)-1), permutation))
             GhostElems.add(ielem1)
             GhostElems.add(ielem2)
             
         return GhostFaces, list(GhostElems)
+    
+    
+    def IdentifyPlasmaBoundaryGhostFaces(self):
+        # COMPUTE PLASMA BOUNDARY GHOST FACES
+        self.PlasmaBoundGhostFaces, self.PlasmaBoundGhostElems = self.IdentifyGhostFaces(self.PLASMAbound)
+        # COMPUTE ELEMENTAL GHOST FACES NORMAL VECTORS
+        for ielem in self.PlasmaBoundGhostElems:
+            self.Elements[ielem].GhostFacesNormals()
+        # CHECK NORMAL VECTORS
+        self.CheckGhostFacesNormalVectors(self.PLASMAbound)
+        return
+    
+    
+    def IdentifyVacVessWallGhostFaces(self):
+        # COMPUTE VACUUM VESSEL WALL GHOST FACES
+        self.VacVessWallGhostFaces, self.VacVessWallGhostElems = self.IdentifyGhostFaces(self.VACVESbound)
+        # COMPUTE ELEMENTAL GHOST FACES NORMAL VECTORS
+        for ielem in self.VacVessWallGhostElems:
+            self.Elements[ielem].GhostFacesNormals()
+        # CHECK NORMAL VECTORS
+        self.CheckGhostFacesNormalVectors(self.VACVESbound) 
+        return
     
     
     ##################################################################################################
@@ -1552,6 +1521,7 @@ class GradShafranovCutFEM:
     def ComputeTotalPlasmaCurrent(self):
         """ Function that computes de total toroidal current carried by the plasma """  
         return self.PlasmaDomainIntegral(self.Jphi)
+    
     
     def ComputeTotalPlasmaCurrentNormalization(self):
         """
@@ -1950,7 +1920,9 @@ class GradShafranovCutFEM:
         
         # IDENTIFY GHOST FACES 
         print("     -> IDENTIFY GHOST FACES...", end="")
-        self.InitialGhostFaces()
+        self.IdentifyPlasmaBoundaryGhostFaces()
+        if self.VACUUM_VESSEL != self.COMPUTATIONAL:
+            self.IdentifyVacVessWallGhostFaces()
         print("Done!")
         
         # COMPUTE NUMERICAL INTEGRATION QUADRATURES
@@ -1966,27 +1938,6 @@ class GradShafranovCutFEM:
         self.writePSI_B()
         print('     Done!')
         return  
-    
-    
-    def InitialGhostFaces(self):
-        # COMPUTE INITIAL PLASMA BOUNDARY GHOST FACES
-        self.PlasmaBoundGhostFaces, self.PlasmaBoundGhostElems = self.IdentifyGhostFaces(self.PLASMAbound)
-        # COMPUTE ELEMENTAL GHOST FACES NORMAL VECTORS
-        for ielem in self.PlasmaBoundGhostElems:
-            self.Elements[ielem].GhostFacesNormals()
-        # CHECK NORMAL VECTORS
-        self.CheckGhostFacesNormalVectors(self.PLASMAbound)
-        
-        # COMPUTE INITIAL VACUUM VESSEL WALL GHOST FACES
-        if self.VACUUM_VESSEL != self.COMPUTATIONAL:
-            self.VacVessWallGhostFaces, self.VacVessWallGhostElems = self.IdentifyGhostFaces(self.VACVESbound)
-            # COMPUTE ELEMENTAL GHOST FACES NORMAL VECTORS
-            for ielem in self.VacVessWallGhostElems:
-                self.Elements[ielem].GhostFacesNormals()
-            # CHECK NORMAL VECTORS
-            self.CheckGhostFacesNormalVectors(self.VACVESbound)
-            
-        return
         
     
     ##################### OPERATIONS ON COMPUTATIONAL DOMAIN'S BOUNDARY EDGES #########################
@@ -2061,47 +2012,6 @@ class GradShafranovCutFEM:
                     scalarprod = np.dot(dir,SEGMENT.NormalVec)
                     if scalarprod > 1e-10: 
                         raise Exception('Dot product equals',scalarprod, 'for mesh element', ielem, ": Normal vector not perpendicular")
-        return
-    
-    def IdentifyCommonCutEdges(self,BOUNDARY):
-        if BOUNDARY == self.PLASMAbound:
-            # FIND COMMON EDGES OF PLASMA BOUNDARY CUT ELEMENTS
-            self.PlasmaBoundElemsComEdges = self.ElementalCommonCutEdgesIdentification(self.PLASMAbound)
-            # CORRECT ELEMENTAL PERMUTED CUTEDGES TO MATCH SEGMENT POINTS IN ADJACENT ELEMENTS
-            self.CorrectPermutedCutEdges(self.PlasmaBoundElemsComEdges)
-        
-        elif BOUNDARY == self.VACVESbound:
-            # FIND COMMON EDGES OF VACUUM VESSEL CUT ELEMENTS (IF DIFFERENT FROM COMPUTATIONAL DOMAIN) 
-            self.VacVessElemsComEdges = self.ElementalCommonCutEdgesIdentification(self.VACVESbound)
-            # CORRECT ELEMENTAL PERMUTED CUTEDGES TO MATCH SEGMENT POINTS IN ADJACENT ELEMENTS
-            self.CorrectPermutedCutEdges(self.VacVessElemsComEdges)
-        return
-    
-    
-    def CheckCutEdgesNormalVectors(self,BOUNDARY):
-        """
-        Checks the orthogonality of the normal vectors to the cut edges for a given boundary.
-
-        This function verifies if the normal vectors at the boundary elements (plasma or vacuum vessel) cut edges are orthogonal to 
-        the corresponding edges. It checks the dot product between the edge direction vector and the 
-        normal vector, raising an exception if the dot product is not close to zero (indicating non-orthogonality).
-
-        Input:
-            BOUNDARY (str): Specifies the boundary to check. Options are:
-                - 'PLASMAbound' for plasma boundary
-                - 'VACVESbound' for vacuum vessel boundary
-        """
-        if BOUNDARY == self.PLASMAbound:
-            elements = self.PlasmaBoundElems
-        elif BOUNDARY == self.VACVESbound:
-            elements = self.VacVessWallElems
-            
-        for ielem in elements:
-            for EDGE in self.Elements[ielem].CutEdges:
-                dir = np.array([EDGE.Xseg[1,0]-EDGE.Xseg[0,0], EDGE.Xseg[1,1]-EDGE.Xseg[0,1]]) 
-                scalarprod = np.dot(dir,EDGE.NormalVec)
-                if scalarprod > 1e-10: 
-                    raise Exception('Dot product equals',scalarprod, 'for mesh element', ielem, ": Normal vector not perpendicular")
         return
     
     
@@ -2279,13 +2189,19 @@ class GradShafranovCutFEM:
                 self.ClassifyElements()
                 # RECOMPUTE PLASMA BOUNDARY APPROXIMATION and NORMAL VECTORS
                 self.ComputePlasmaBoundaryApproximation()
-        
+                # REIDENTIFY PLASMA BOUNDARY GHOST FACES
+                self.IdentifyPlasmaBoundaryGhostFaces()
+                
                 ###### RECOMPUTE NUMERICAL INTEGRATION QUADRATURES
-                for elem in np.concatenate((self.PlasmaElems, self.VacuumElems), axis = 0):
-                    self.Elements[elem].ComputeStandardQuadrature2D(self.QuadratureOrder)
+                # COMPUTE STANDARD QUADRATURE ENTITIES FOR NON-CUT ELEMENTS
+                for ielem in np.concatenate((self.PlasmaElems, self.VacuumElems), axis = 0):
+                    self.Elements[ielem].ComputeStandardQuadrature2D(self.QuadratureOrder)
                 # COMPUTE ADAPTED QUADRATURE ENTITIES FOR INTERFACE ELEMENTS
-                for elem in self.PlasmaBoundElems:
-                    self.Elements[elem].ComputeAdaptedQuadratures(self.QuadratureOrder)
+                for ielem in self.PlasmaBoundElems:
+                    self.Elements[ielem].ComputeAdaptedQuadratures(self.QuadratureOrder)
+                # COMPUTE PLASMA BOUNDARY GHOST FACES QUADRATURES
+                for ielem in self.PlasmaBoundGhostElems: 
+                    self.Elements[ielem].ComputeGhostFacesQuadratures(self.QuadratureOrder)
                     
                 # RECOMPUTE NUMBER OF NODES ON PLASMA BOUNDARY APPROXIMATION 
                 self.NnPB = self.ComputeInterfaceNumberNodes(self.PLASMAbound)
@@ -2339,39 +2255,39 @@ class GradShafranovCutFEM:
     
     def IntegrateGhostPenaltyTerms(self,BOUNDARY):
         if BOUNDARY == self.PLASMAbound:
-            comcutedges = self.PlasmaBoundElemsComEdges
+            ghostfaces = self.PlasmaBoundGhostFaces
         elif BOUNDARY == self.VACVESbound:
-            comcutedges == self.VacVessElemsComEdges
+            ghostfaces = self.VacVessWallGhostFaces
             
-        for comcutedge in comcutedges:
+        for ghostface in ghostfaces:
             # ISOLATE COMMON CUT EDGE FROM ADJACENT ELEMENTS
-            Tseg = comcutedge[0]
-            EDGE0 = self.Elements[comcutedge[1][0]].CutEdges[comcutedge[1][1]]
-            EDGE1 = self.Elements[comcutedge[2][0]].CutEdges[comcutedge[2][1]]
+            Tface = ghostface[0]
+            FACE0 = self.Elements[ghostface[1][0]].GhostFaces[ghostface[1][2]]
+            FACE1 = self.Elements[ghostface[2][0]].GhostFaces[ghostface[2][2]]
             # DEFINE ELEMENTAL MATRICES
-            LHSe = np.zeros([len(Tseg),len(Tseg)])
+            LHSe = np.zeros([len(Tface),len(Tface)])
             
             # LOOP OVER GAUSS INTEGRATION NODES
-            for ig in range(EDGE0.ng):  
+            for ig in range(FACE0.ng):  
                 # SHAPE FUNCTIONS GRADIENT IN PHYSICAL SPACE
-                n_dot_Ngrad0 = EDGE0.NormalVec@np.array([EDGE0.dNdxig[ig,:],EDGE0.dNdetag[ig,:]])
-                n_dot_Ngrad1 = EDGE1.NormalVec@np.array([EDGE1.dNdxig[ig,:],EDGE1.dNdetag[ig,:]])
-                R = EDGE0.Xg[ig,0]
+                n_dot_Ngrad0 = FACE0.NormalVec@np.array([FACE0.dNdxig[ig,:],FACE0.dNdetag[ig,:]])
+                n_dot_Ngrad1 = FACE1.NormalVec@np.array([FACE1.dNdxig[ig,:],FACE1.dNdetag[ig,:]])
+                R = FACE0.Xg[ig,0]
                 if self.PLASMA_CURRENT == self.LINEAR_CURRENT or self.PLASMA_CURRENT == self.NONLINEAR_CURRENT:   # DIMENSIONLESS SOLUTION CASE 
                     n_dot_Ngrad0 *= self.R0
                     n_dot_Ngrad1 *= self.R0
                     R /= self.R0
                 # COMPUTE ELEMENTAL CONTRIBUTIONS AND ASSEMBLE GLOBAL SYSTEM
-                for i in range(len(Tseg)):  # ROWS ELEMENTAL MATRIX
-                    for j in range(len(Tseg)):  # COLUMNS ELEMENTAL MATRIX
+                for i in range(len(Tface)):  # ROWS ELEMENTAL MATRIX
+                    for j in range(len(Tface)):  # COLUMNS ELEMENTAL MATRIX
                         # COMPUTE LHS MATRIX TERMS
                         ### GHOST PENALTY TERM  [ jump(nabla(N_i))*jump(nabla(N_j)) *(Jacobiano) ]  
-                        LHSe[i,j] += self.zeta*(n_dot_Ngrad1[i]+n_dot_Ngrad0[i])*(n_dot_Ngrad1[j]+n_dot_Ngrad0[j]) * EDGE0.detJg[ig] * EDGE0.Wg[ig]
+                        LHSe[i,j] += self.zeta*(n_dot_Ngrad1[i]+n_dot_Ngrad0[i])*(n_dot_Ngrad1[j]+n_dot_Ngrad0[j]) * FACE0.detJg[ig] * FACE0.Wg[ig]
                                                    
             # ASSEMBLE ELEMENTAL CONTRIBUTIONS INTO GLOBAL SYSTEM
-            for i in range(len(Tseg)):   # ROWS ELEMENTAL MATRIX
-                for j in range(len(Tseg)):   # COLUMNS ELEMENTAL MATRIX
-                    self.LHS[Tseg[i],Tseg[j]] += LHSe[i,j]
+            for i in range(len(Tface)):   # ROWS ELEMENTAL MATRIX
+                for j in range(len(Tface)):   # COLUMNS ELEMENTAL MATRIX
+                    self.LHS[Tface[i],Tface[j]] += LHSe[i,j]
                                         
         return
     
@@ -2548,10 +2464,10 @@ class GradShafranovCutFEM:
                 
 
         # INTEGRATE GHOST PENALTY TERM OVER CUT ELEMENTS INTERNAL CUT EDGES
-        print("     Integrate ghost penalty term along cut elements internal cut edges...", end="")
+        print("     Integrate ghost penalty term along cut elements internal ghost faces...", end="")
         self.IntegrateGhostPenaltyTerms(self.PLASMAbound)
-        if self.VACUUM_VESSEL != self.COMPUTATIONAL:
-            self.IntegrateGhostPenaltyTerms(self.VACVESbound)
+        #if self.VACUUM_VESSEL != self.COMPUTATIONAL:
+        #    self.IntegrateGhostPenaltyTerms(self.VACVESbound)
         print("Done!") 
         
         print("Done!")   
@@ -2700,7 +2616,8 @@ class GradShafranovCutFEM:
                 Brz[ELEM.Te[inode],:] += Brze[inode,:]
                 counter[ELEM.Te[inode]] += 1
         # COMPUTE MEAN VALUE 
-        Brz /= counter
+        for i in range(2):
+            Brz[:,i] /= counter
         return Brz
     
     
@@ -3222,17 +3139,13 @@ class GradShafranovCutFEM:
             
         return
     
-    def InspectElement(self,element_index,BOUNDARY,PSI,TESSELLATION,CUTEDGES,NORMALS,QUADRATURE):
+    def InspectElement(self,element_index,BOUNDARY,PSI,TESSELLATION,GHOSTFACES,NORMALS,QUADRATURE):
         
         ELEM = self.Elements[element_index]
         Xmin = np.min(ELEM.Xe[:,0])-0.1
         Xmax = np.max(ELEM.Xe[:,0])+0.1
         Ymin = np.min(ELEM.Xe[:,1])-0.1
         Ymax = np.max(ELEM.Xe[:,1])+0.1
-        if ELEM.ElType == 1:
-            numedges = 3
-        elif ELEM.ElType == 2:
-            numedges = 4
             
         color = self.ElementColor(ELEM.Dom)
         colorlist = ['#009E73','#D55E00','#CC79A7','#56B4E9']
@@ -3245,11 +3158,12 @@ class GradShafranovCutFEM:
             axs[0].tricontour(self.X[:,0],self.X[:,1], self.PSI_NORM[:,1], levels=[0], colors = 'black')
         axs[0].tricontour(self.X[:,0],self.X[:,1], self.PlasmaBoundLevSet, levels=[0], colors = 'red')
         # PLOT ELEMENT EDGES
-        for iedge in range(numedges):
+        for iedge in range(ELEM.numedges):
             axs[0].plot([ELEM.Xe[iedge,0],ELEM.Xe[int((iedge+1)%ELEM.numedges),0]],[ELEM.Xe[iedge,1],ELEM.Xe[int((iedge+1)%ELEM.numedges),1]], color=color, linewidth=3)
 
         axs[1].set_xlim(Xmin,Xmax)
         axs[1].set_ylim(Ymin,Ymax)
+        axs[1].set_aspect('equal')
         axs[1].tricontour(self.X[:,0],self.X[:,1], self.PlasmaBoundLevSet, levels=[0], colors = 'red',linewidths=2)
         # PLOT ELEMENT EDGES
         for iedge in range(ELEM.numedges):
@@ -3271,9 +3185,9 @@ class GradShafranovCutFEM:
                 axs[1].scatter(INTERFACE.Xint[:,0],INTERFACE.Xint[:,1],marker='o',color='red',s=100, zorder=5)
                 for SEGMENT in INTERFACE.Segments:
                     axs[1].scatter(SEGMENT.Xseg[:,0],SEGMENT.Xseg[:,1],marker='o',color='green',s=30, zorder=5)
-        if CUTEDGES:
-            for EDGE in ELEM.CutEdges:
-                axs[1].plot(EDGE.Xseg[:2,0],EDGE.Xseg[:2,1],color=colorlist[-1],linestyle='dashed',linewidth=3)
+        if GHOSTFACES:
+            for FACE in ELEM.GhostFaces:
+                axs[1].plot(FACE.Xseg[:2,0],FACE.Xseg[:2,1],color=colorlist[-1],linestyle='dashed',linewidth=3)
         if NORMALS:
             if BOUNDARY:
                 for INTERFACE in ELEM.InterfApprox:
@@ -3282,12 +3196,12 @@ class GradShafranovCutFEM:
                         Xsegmean = np.mean(SEGMENT.Xseg, axis=0)
                         dl = 10
                         axs[1].arrow(Xsegmean[0],Xsegmean[1],SEGMENT.NormalVec[0]/dl,SEGMENT.NormalVec[1]/dl,width=0.01)
-            if CUTEDGES:
-                for EDGE in ELEM.CutEdges:
+            if GHOSTFACES:
+                for FACE in ELEM.GhostFaces:
                     # PLOT NORMAL VECTORS
-                    Xsegmean = np.mean(EDGE.Xseg, axis=0)
+                    Xsegmean = np.mean(FACE.Xseg, axis=0)
                     dl = 10
-                    axs[1].arrow(Xsegmean[0],Xsegmean[1],EDGE.NormalVec[0]/dl,EDGE.NormalVec[1]/dl,width=0.01)
+                    axs[1].arrow(Xsegmean[0],Xsegmean[1],FACE.NormalVec[0]/dl,FACE.NormalVec[1]/dl,width=0.01)
         if QUADRATURE:
             if ELEM.Dom == -1 or ELEM.Dom == 1 or ELEM.Dom == 3:
                 # PLOT STANDARD QUADRATURE INTEGRATION POINTS
@@ -3309,22 +3223,22 @@ class GradShafranovCutFEM:
                     for INTERFACE in ELEM.InterfApprox:
                         for SEGMENT in INTERFACE.Segments:
                             axs[1].scatter(SEGMENT.Xg[:,0],SEGMENT.Xg[:,1],marker='x',color='grey',s=50, zorder=5)
-                if CUTEDGES:
+                if GHOSTFACES:
                     # PLOT CUT EDGES QUADRATURES 
-                    for EDGE in ELEM.CutEdges:
-                        axs[1].scatter(EDGE.Xg[:,0],EDGE.Xg[:,1],marker='x',color='k',s=50, zorder=6)
+                    for FACE in ELEM.GhostFaces:
+                        axs[1].scatter(FACE.Xg[:,0],FACE.Xg[:,1],marker='x',color='k',s=50, zorder=6)
         return
     
     
-    def InspectComCutEdge(self,BOUNDARY,index):
+    def InspectGhostFace(self,BOUNDARY,index):
         if BOUNDARY == self.PLASMAbound:
-            comcutedge = self.PlasmaBoundElemsComEdges[index]
+            ghostface = self.PlasmaBoundGhostFaces[index]
         elif BOUNDARY == self.VACVESbound:
-            comcutedge == self.VacVessElemsComEdges[index]
+            ghostface == self.VacVessWallGhostFaces[index]
     
         # ISOLATE ELEMENTS
-        ELEMS = [self.Elements[comcutedge[1][0]],self.Elements[comcutedge[2][0]]]
-        EDGES = [ELEMS[0].CutEdges[comcutedge[1][1]],ELEMS[1].CutEdges[comcutedge[2][1]]]
+        ELEMS = [self.Elements[ghostface[1][0]],self.Elements[ghostface[2][0]]]
+        FACES = [ELEMS[0].CutEdges[ghostface[1][1]],ELEMS[1].CutEdges[ghostface[2][1]]]
         
         color = self.ElementColor(ELEMS[0].Dom)
         colorlist = ['#009E73','#D55E00','#CC79A7','#56B4E9']
@@ -3347,6 +3261,29 @@ class GradShafranovCutFEM:
                 else:
                     cl = 'red'
                 axs[1].scatter(ELEM.Xe[inode,0],ELEM.Xe[inode,1],s=120,color=cl,zorder=5)
+                
+        # PLOT CUT EDGES
+        for iedge, FACE in enumerate(FACES):
+            axs.plot(FACE.Xseg[:2,0],FACE.Xseg[:2,1],color='#D55E00',linestyle='dashed',linewidth=3)
+            
+        for inode in range(FACES[0].n):
+            axs.text(FACES[0].Xseg[inode,0]+0.03,FACES[0].Xseg[inode,1],str(inode),fontsize=12, color=colorlist[0])
+        for inode in range(FACES[1].n):
+            axs.text(FACES[1].Xseg[inode,0]-0.03,FACES[1].Xseg[inode,1],str(inode),fontsize=12, color=colorlist[1])
+            
+        for iedge, FACE in enumerate(FACES):
+            # PLOT NORMAL VECTORS
+            Xsegmean = np.mean(FACE.Xseg, axis=0)
+            dl = 10
+            axs.arrow(Xsegmean[0],Xsegmean[1],FACE.NormalVec[0]/dl,FACE.NormalVec[1]/dl,width=0.01, color=colorlist[iedge])
+            # PLOT CUT EDGES QUADRATURES 
+            for FACE in FACES:
+                axs.scatter(FACE.Xg[:,0],FACE.Xg[:,1],marker='x',color='k',s=80, zorder=6)
+                
+        for inode in range(FACES[0].ng):
+            axs.text(FACES[0].Xg[inode,0]+0.03,FACES[0].Xg[inode,1],str(inode),fontsize=12, color=colorlist[0])
+        for inode in range(FACES[1].ng):
+            axs.text(FACES[1].Xg[inode,0]-0.03,FACES[1].Xg[inode,1],str(inode),fontsize=12, color=colorlist[1])
             
         return
     
@@ -3388,7 +3325,7 @@ class GradShafranovCutFEM:
         plt.show()
         return
     
-    def PlotClassifiedElements(self,CUTEDGES,GHOSTFACES,**kwargs):
+    def PlotClassifiedElements(self,GHOSTFACES,**kwargs):
         plt.figure(figsize=(5,6))
         if not kwargs:
             plt.ylim(self.Zmin-0.25,self.Zmax+0.25)
@@ -3442,17 +3379,15 @@ class GradShafranovCutFEM:
         plt.tricontour(self.X[:,0],self.X[:,1], self.PlasmaBoundLevSet, levels=[0], colors='green',linewidths=3)
         # PLOT VACUUM VESSEL FIRST WALL
         plt.tricontour(self.X[:,0],self.X[:,1], self.VacVessWallLevSet, levels=[0], colors='orange',linewidths=3)
-        
-        # PLOT CUTEDGES 
-        if CUTEDGES:
-            for cutedge in self.PlasmaBoundElemsComEdges:
-                plt.plot(self.X[cutedge[0][:2],0],self.X[cutedge[0][:2],1],linewidth=2,color='#56B4E9')
                 
         # PLOT GHOSTFACES 
         if GHOSTFACES:
             for ghostface in self.PlasmaBoundGhostFaces:
                 plt.plot(self.X[ghostface[0][:2],0],self.X[ghostface[0][:2],1],linewidth=2,color='#56B4E9')
-        
+            if self.VACUUM_VESSEL != self.COMPUTATIONAL:
+                for ghostface in self.VacVessWallGhostFaces:
+                    plt.plot(self.X[ghostface[0][:2],0],self.X[ghostface[0][:2],1],linewidth=2,color='#CC79A7')
+        #colorlist = ['#009E73','#D55E00','#CC79A7','#56B4E9']
         plt.show()
         return
         
