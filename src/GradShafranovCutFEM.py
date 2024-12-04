@@ -35,6 +35,7 @@ from src.GaussQuadrature import *
 from src.ShapeFunctions import *
 from src.Element import *
 from src.Magnet import *
+from src.Greens import *
 
 class GradShafranovCutFEM:
     
@@ -467,7 +468,10 @@ class GradShafranovCutFEM:
         def BlockExternalMagnets(self,line,i,j):
             if line[0] == 'N_COILS:':    # READ TOTAL NUMBER COILS 
                 self.Ncoils = int(line[1])
-                self.COILS = [Coil(index = icoil, dim=self.dim, X=np.zeros([self.dim]), I=None) for icoil in range(self.Ncoils)] 
+                self.COILS = [Coil(index = icoil, 
+                                   dim=self.dim, 
+                                   X=np.zeros([self.dim]), 
+                                   I=None) for icoil in range(self.Ncoils)] 
             elif line[0] == 'Rposi:' and i<self.Ncoils:    # READ i-th COIL X POSITION
                 self.COILS[i].X[0] = float(line[1])
             elif line[0] == 'Zposi:' and i<self.Ncoils:    # READ i-th COIL Y POSITION
@@ -478,7 +482,11 @@ class GradShafranovCutFEM:
             # READ SOLENOID PARAMETERS:
             elif line[0] == 'N_SOLENOIDS:':    # READ TOTAL NUMBER OF SOLENOIDS
                 self.Nsolenoids = int(line[1])
-                self.SOLENOIDS = [Solenoid(index = isole, ElOrder=self.ElOrder, dim=self.dim, Xe=np.zeros([2,self.dim]), I=None) for isole in range(self.Nsolenoids)] 
+                self.SOLENOIDS = [Solenoid(index = isole, 
+                                           dim=self.dim, 
+                                           Xe=np.zeros([2,self.dim]), 
+                                           I=None,
+                                           Nturns = None) for isole in range(self.Nsolenoids)] 
             elif line[0] == 'Rposi:' and j<self.Nsolenoids:    # READ j-th SOLENOID X POSITION
                 self.SOLENOIDS[j].Xe[0,0] = float(line[1])
                 self.SOLENOIDS[j].Xe[1,0] = float(line[1])
@@ -486,7 +494,8 @@ class GradShafranovCutFEM:
                 self.SOLENOIDS[j].Xe[0,1] = float(line[1])
             elif line[0] == 'Zuppe:' and j<self.Nsolenoids:      # READ j-th SOLENOID Y POSITION
                 self.SOLENOIDS[j].Xe[1,1] = float(line[1])
-                self.SOLENOIDS[j].ComputeHOnodes()
+            elif line[0] == 'Nturn:' and j<self.Nsolenoids:      # READ j-th SOLENOID NUMBER OF TURNS
+                self.SOLENOIDS[j].Nturns = int(line[1])
             elif line[0] == 'Inten:' and j<self.Nsolenoids:    # READ j-th SOLENOID INTENSITY
                 self.SOLENOIDS[j].I = float(line[1])
                 j += 1
@@ -974,6 +983,7 @@ class GradShafranovCutFEM:
                 LS[i] = np.abs(LS[i])
         return LS
     
+    
     ##################################################################################################
     ################################# VACUUM VESSEL BOUNDARY PSI_B ###################################
     ##################################################################################################
@@ -988,40 +998,6 @@ class GradShafranovCutFEM:
             PSI_B (ndarray): Array of boundary values for the poloidal flux function (PSI_B) 
                             defined over the nodes of the vacuum vessel's boundary.
         """
-        
-        def ellipticK(k):
-            """ 
-            COMPLETE ELLIPTIC INTEGRAL OF 1rst KIND 
-            """
-            pk=1.0-k*k
-            if k == 1:
-                ellipticK=1.0e+16
-            else:
-                AK = (((0.01451196212*pk+0.03742563713)*pk +0.03590092383)*pk+0.09666344259)*pk+1.38629436112
-                BK = (((0.00441787012*pk+0.03328355346)*pk+0.06880248576)*pk+0.12498593597)*pk+0.5
-                ellipticK = AK-BK*np.log(pk)
-            return ellipticK
-
-        def ellipticE(k):
-            """
-            COMPLETE ELLIPTIC INTEGRAL OF 2nd KIND
-            """
-            pk = 1 - k*k
-            if k == 1:
-                ellipticE = 1
-            else:
-                AE=(((0.01736506451*pk+0.04757383546)*pk+0.0626060122)*pk+0.44325141463)*pk+1
-                BE=(((0.00526449639*pk+0.04069697526)*pk+0.09200180037)*pk+0.2499836831)*pk
-                ellipticE = AE-BE*np.log(pk)
-            return ellipticE
-        
-        def GreenFunction(Xb,Xp):
-            """ 
-            GREEN FUNCTION ASSOCIATED TO THE GRAD-SHAFRANOV'S EQUATION ELLIPTIC OPERATOR. 
-            """
-            k= np.sqrt(4*Xb[0]*Xp[0]/((Xb[0]+Xp[0])**2 + (Xp[1]-Xb[1])**2))
-            Greenfun = (1/(2*np.pi))*(np.sqrt(Xp[0]*Xb[0])/k)*((2-k**2)*ellipticK(k)-2*ellipticE(k))
-            return Greenfun
                 
         PSI_B = np.zeros([self.NnFW])    
         # FOR FIXED PLASMA BOUNDARY PROBLEM THE VACUUM VESSEL BOUNDARY VALUES PSI_B ARE IRRELEVANT ->> PSI_B = 0
@@ -1038,15 +1014,11 @@ class GradShafranovCutFEM:
                             
                             # CONTRIBUTION FROM EXTERNAL COILS CURRENT 
                             for COIL in self.COILS: 
-                                PSI_B[k] += self.mu0 * GreenFunction(Xnode,COIL.X) * COIL.I
+                                PSI_B[k] += self.mu0 * COIL.Psi(Xnode)
                             
-                            # CONTRIBUTION FROM EXTERNAL SOLENOIDS CURRENT  ->>  INTEGRATE OVER SOLENOID LENGTH 
+                            # CONTRIBUTION FROM EXTERNAL SOLENOIDS CURRENT   
                             for SOLENOID in self.SOLENOIDS:
-                                Jsole = SOLENOID.I/np.linalg.norm(SOLENOID.Xe[0,:]-SOLENOID.Xe[1,:])   # SOLENOID CURRENT LINEAR DENSITY
-                                # LOOP OVER GAUSS NODES
-                                for ig in range(SOLENOID.ng):
-                                    for l in range(SOLENOID.n):
-                                        PSI_B[k] += self.mu0 * GreenFunction(Xnode,SOLENOID.Xg[ig,:]) * Jsole * SOLENOID.Ng[ig,l] * SOLENOID.detJg[ig] * SOLENOID.Wg[ig]
+                                PSI_B[k] += self.mu0 * SOLENOID.Psi(Xnode)
                                         
                             # CONTRIBUTION FROM PLASMA CURRENT  ->>  INTEGRATE OVER PLASMA REGION
                             #   1. INTEGRATE IN PLASMA ELEMENTS
@@ -1058,7 +1030,7 @@ class GradShafranovCutFEM:
                                 # LOOP OVER GAUSS NODES
                                 for ig in range(ELEMENT.ng):
                                     for l in range(ELEMENT.n):
-                                        PSI_B[k] += self.mu0 * GreenFunction(Xnode, ELEMENT.Xg[ig,:])*self.Jphi(ELEMENT.Xg[ig,:],
+                                        PSI_B[k] += self.mu0 * GreensFunction(Xnode, ELEMENT.Xg[ig,:])*self.Jphi(ELEMENT.Xg[ig,:],
                                                                     PSIg[ig])*ELEMENT.Ng[ig,l]*ELEMENT.detJg[ig]*ELEMENT.Wg[ig]*self.gamma
                                                 
                             #   2. INTEGRATE IN CUT ELEMENTS, OVER SUBELEMENT IN PLASMA REGION
@@ -1073,7 +1045,7 @@ class GradShafranovCutFEM:
                                         # LOOP OVER GAUSS NODES
                                         for ig in range(SUBELEM.ng):
                                             for l in range(SUBELEM.n):
-                                                PSI_B[k] += self.mu0 * GreenFunction(Xnode, SUBELEM.Xg[ig,:])*self.Jphi(SUBELEM.Xg[ig,:],
+                                                PSI_B[k] += self.mu0 * GreensFunction(Xnode, SUBELEM.Xg[ig,:])*self.Jphi(SUBELEM.Xg[ig,:],
                                                                     PSIg[ig])*SUBELEM.Ng[ig,l]*SUBELEM.detJg[ig]*SUBELEM.Wg[ig]*self.gamma   
                             k += 1
         return PSI_B
@@ -2075,10 +2047,6 @@ class GradShafranovCutFEM:
             for ielem in self.VacVessWallGhostElems:
                 self.Elements[ielem].ComputeGhostFacesQuadratures(self.QuadratureOrder)
                 
-        # FOR FREE-BOUNDARY PROBLEM, COMPUTE QUADRATURES FOR SOLENOIDS
-        if self.PLASMA_BOUNDARY == self.FREE_BOUNDARY:
-            for SOLENOID in self.SOLENOIDS:
-                SOLENOID.ComputeIntegrationQuadrature(self.QuadratureOrder)
         return
     
     #################### UPDATE EMBEDED METHOD ##############################
@@ -2287,11 +2255,8 @@ class GradShafranovCutFEM:
             # ASSEMBLE ELEMENTAL CONTRIBUTIONS INTO GLOBAL SYSTEM
             for i in range(len(Tface)):   # ROWS ELEMENTAL MATRIX
                 for j in range(len(Tface)):   # COLUMNS ELEMENTAL MATRIX
-                    self.LHS[Tface[i],Tface[j]] += LHSe[i,j]
-                                        
+                    self.LHS[Tface[i],Tface[j]] += LHSe[i,j]                          
         return
-    
-    
     
     
     def AssembleGlobalSystem(self):
@@ -2620,6 +2585,39 @@ class GradShafranovCutFEM:
             Brz[:,i] /= counter
         return Brz
     
+    def ComputeMagnetsBfield(self,regular_grid=False,**kwargs):
+        if regular_grid:
+            # Define regular grid
+            Nr = 50
+            Nz = 70
+            grid_r, grid_z= np.meshgrid(np.linspace(kwargs['rmin'], kwargs['rmax'], Nr),np.linspace(kwargs['zmin'], kwargs['zmax'], Nz))
+            Br = np.zeros([Nz,Nr])
+            Bz = np.zeros([Nz,Nr])
+            for ir in range(Nr):
+                for iz in range(Nz):
+                    # SUM COILS CONTRIBUTIONS
+                    for COIL in self.COILS:
+                        Br[iz,ir] += COIL.Br(np.array([grid_r[iz,ir],grid_z[iz,ir]]))
+                        Bz[iz,ir] += COIL.Bz(np.array([grid_r[iz,ir],grid_z[iz,ir]]))
+                    # SUM SOLENOIDS CONTRIBUTIONS
+                    for SOLENOID in self.SOLENOIDS:
+                        Br[iz,ir] += SOLENOID.Br(np.array([grid_r[iz,ir],grid_z[iz,ir]]))
+                        Bz[iz,ir] += SOLENOID.Bz(np.array([grid_r[iz,ir],grid_z[iz,ir]]))
+            return grid_r, grid_z, Br, Bz
+        else:
+            Br = np.zeros([self.Nn])
+            Bz = np.zeros([self.Nn])
+            for inode in range(self.Nn):
+                # SUM COILS CONTRIBUTIONS
+                for COIL in self.COILS:
+                    Br[inode] += COIL.Br(self.X[inode,:])
+                    Br[inode] += COIL.Br(self.X[inode,:])
+                # SUM SOLENOIDS CONTRIBUTIONS
+                for SOLENOID in self.SOLENOIDS:
+                    Br[inode] += SOLENOID.Br(self.X[inode,:])
+                    Br[inode] += SOLENOID.Br(self.X[inode,:])
+            return Br, Bz
+    
     
     ##################################################################################################
     ############################################# OUTPUT #############################################
@@ -2815,6 +2813,7 @@ class GradShafranovCutFEM:
                     self.PARAMS_file.write("    Rup = {:f}\n".format(SOLENOID.Xe[1,0]))
                     self.PARAMS_file.write("    Zup = {:f}\n".format(SOLENOID.Xe[1,1]))
                     self.PARAMS_file.write("    Inten = {:f}\n".format(SOLENOID.I))
+                    self.PARAMS_file.write("    Nturns = {:f}\n".format(SOLENOID.Nturns))
                     self.PARAMS_file.write('\n')
                 self.PARAMS_file.write('END_EXTERNAL_SOLENOIDS_PARAMETERS\n')
                 self.PARAMS_file.write('\n')
@@ -3137,6 +3136,19 @@ class GradShafranovCutFEM:
             plt.show(block=False)
             plt.pause(0.8)
             
+        return
+    
+    
+    def PlotMagneticField(self,streamplot=True):
+        
+        if streamplot:
+            R, Z, Br, Bz = self.ComputeMagnetsBfield(regular_grid=True)
+            # Poloidal field magnitude
+            Bp = np.sqrt(Br**2 + Br**2)
+            plt.contourf(R, Z, np.log(Bp), 50)
+            plt.streamplot(R, Z, Br, Bz)
+            plt.show()
+        
         return
     
     def InspectElement(self,element_index,BOUNDARY,PSI,TESSELLATION,GHOSTFACES,NORMALS,QUADRATURE):
