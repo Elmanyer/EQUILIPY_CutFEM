@@ -8,6 +8,10 @@ The problem is tackle as a free-boundary problem, where the plasma cross-section
 
 The input files *.equ.dat* and meshes available in the repository have been designed according to the ITER tokamak cross-section geometry. In order to launch simulations with other geometries, the user shall change the geometrical parameters for the vacuum vessel and the external coils and solenoids from the input file *.equ.dat*.
 
+## *CODE:*
+
+EQUILIPY_CutFEM
+
 ## *CONTENT:*
 - folder **src**: contains the source code
 - folder **CASES**: contains the input files *.equ.dat* for the different problem cases
