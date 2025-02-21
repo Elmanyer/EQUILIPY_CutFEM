@@ -2,15 +2,31 @@
 
 ## *PROBLEM DESCRIPTION:*
 
-The Grad-Shafranov equation is an nonlinear elliptic PDE which models the force balance between the plasma expansion pressure and the magnetic confinement pressure in an axisymmetrical system. Solving the equation yields the plasma equilibrium cross-section configuration.
+The Grad-Shafranov equation is an nonlinear elliptic PDE which models the force balance between the plasma expansion pressure and the magnetic confinement pressure in an axisymmetrical system. 
+Solving the equation yields the plasma equilibrium cross-section configuration.
 
-The problem is tackle as a free-boundary problem, where the plasma cross-section geometry is free to evolve and deform towards the equilibrium state. In order to deal with such configuration, the solver is based on a CutFEM numerical scheme, a non-conforming mesh Finite Element Method where the geometry is embedded in the mesh. 
+The problem is tackle as a free-boundary problem, where the plasma cross-section geometry is free to evolve and deform towards the equilibrium state. 
+In order to deal with such configuration, the solver is based on a CutFEM numerical scheme, a non-conforming mesh Finite Element Method where the geometry is embedded in the mesh. 
 
-The input files *.equ.dat* and meshes available in the repository have been designed according to the ITER tokamak cross-section geometry. In order to launch simulations with other geometries, the user shall change the geometrical parameters for the vacuum vessel and the external coils and solenoids from the input file *.equ.dat*.
+The input files *.equ.dat* and meshes available in the repository have been designed according to the ITER tokamak cross-section geometry.
+In order to launch simulations with other geometries, the user shall change the geometrical parameters for the vacuum vessel and the external coils and solenoids from the input file *.equ.dat*.
 
 ## *CODE:*
 
-EQUILIPY_CutFEM
+The EQUILIPY_CutFEM solver is built on a CutFEM numerical scheme, where the plasma cross-section geometry is free to deform and evolve towards the equilibrium configuration. 
+Both the plasma region and the tokamak's vacuum vessel wall geometries are parametrised using two distinct level-set functions, both domains being embedded in a larger uncomforming mesh.
+Hence, both the initial plasma cross-section and the fixed vacuum vessel wall geometries can be arbitrarily defined as inputs by the user.
+
+Under such circumstances, both plasma boundary and vacuum vessel wall generate cut-elements on which the FE methodology is adapted: 
+- **Adapted numerical integration quadratures** to integrate on each subdomain composing the cut-element
+- **Weakly imposition of BC** using Nitsche's method 
+- **Ghost stabilisation** is applied to reduce irregular cut-elements instabilities
+
+In case where the computational domain's boundary is taken as the vacuum vessel wall, the BC are still imposed weakly using Nitsche's method. 
+
+EQUILIPY_CutFEM can solve two distinct problems: either *fixed-boundary* or *free-boundary* problems:
+- **The fixed-boundary problem** refers to an artificial case where the plasma shape is *a priori* known, and therefore the plasma region and by extension its boundary are fixed. 
+- **The free-boundary problem** refers to the situation when the shape of the plasma domain is unknown.
 
 ## *CONTENT:*
 - folder **src**: contains the source code
