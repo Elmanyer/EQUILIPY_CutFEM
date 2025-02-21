@@ -18,15 +18,19 @@ Both the plasma region and the tokamak's vacuum vessel wall geometries are param
 Hence, both the initial plasma cross-section and the fixed vacuum vessel wall geometries can be arbitrarily defined as inputs by the user.
 
 Under such circumstances, both plasma boundary and vacuum vessel wall generate cut-elements on which the FE methodology is adapted: 
-- **Adapted numerical integration quadratures** to integrate on each subdomain composing the cut-element
-- **Weakly imposition of BC** using Nitsche's method 
+- **Standard high-order approach adapted numerical integration quadratures** to integrate on each subdomain composing the cut-element
+- **Nitsche's method** to weakly impose boundary conditions (BC) 
 - **Ghost stabilisation** is applied to reduce irregular cut-elements instabilities
 
 In case where the computational domain's boundary is taken as the vacuum vessel wall, the BC are still imposed weakly using Nitsche's method. 
 
 EQUILIPY_CutFEM can solve two distinct problems: either *fixed-boundary* or *free-boundary* problems:
-- **The fixed-boundary problem** refers to an artificial case where the plasma shape is *a priori* known, and therefore the plasma region and by extension its boundary are fixed. 
+- **The fixed-boundary problem** refers to an artificial case where the plasma shape is *a priori* known, and therefore the plasma region and by extension its boundary are fixed.
+In this case, both the vacuum vessel wall parametrisation and the external magnets configuration are irrelevant, as the equilibrium state is forced on the system by fixing the plasma boundary.
+Analytical solutions can be obtained by selecting the adequate source term function (plasma current model) and imposing the correct BC on the plasma boundary. 
 - **The free-boundary problem** refers to the situation when the shape of the plasma domain is unknown.
+In this case, the magnetic confinement is projected onto the vacuum vessel wall using a Green's function formalism, thus providing the corresponding BC so that the plasma domain converges towards the equilibrium state iteratively. 
+Adequate tolerances and maximal iteration thresholds shall be specified as inputs for both loops: internal loop, responsible of converging the poloidal magnetic field solution; external loop, responsible for converging the projected BC poloidal magnetic values.   
 
 ## *CONTENT:*
 - folder **src**: contains the source code
