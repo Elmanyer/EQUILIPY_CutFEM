@@ -19,9 +19,9 @@
 # Research Group: Nuclear Fusion  
 
 
-from src.GaussQuadrature import *
-from src.ShapeFunctions import *
-from src.Greens import *
+from GaussQuadrature import *
+from ShapeFunctions import *
+from Greens import *
 
 class Coil:
     """

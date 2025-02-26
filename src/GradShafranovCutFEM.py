@@ -31,11 +31,11 @@ import os
 import shutil
 from random import random
 from scipy.interpolate import griddata
-from src.GaussQuadrature import *
-from src.ShapeFunctions import *
-from src.Element import *
-from src.Magnet import *
-from src.Greens import *
+from GaussQuadrature import *
+from ShapeFunctions import *
+from Element import *
+from Magnet import *
+from Greens import *
 
 class GradShafranovCutFEM:
     

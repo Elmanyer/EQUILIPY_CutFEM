@@ -28,9 +28,9 @@
 
 
 import sys
-sys.path.append('../')
+sys.path.append('../src')
 
-from src.GradShafranovCutFEM import *
+from GradShafranovCutFEM import *
 
 ### SELECT MESH 
 #MESH = 'TS-CUTFEM-TRI03-FINE-REDUCED'
